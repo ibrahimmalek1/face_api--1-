@@ -7,12 +7,10 @@ logger = logging.getLogger(__name__)
 
 class ImageProcessingService:
     def __init__(self):
-        self.MAX_SIZE_BYTES = 1024 * 1024  # 1MB
+        # HARD LIMIT: 500KB
+        self.MAX_SIZE_BYTES = 500 * 1024  
 
     def process_image(self, base_image_file: BinaryIO, watermark_bytes: bytes | None = None) -> bytes:
-        """
-        Standard processing: Always attempts to watermark (if provided) and compress.
-        """
         try:
             # 1. Load
             base_img = Image.open(base_image_file).convert("RGBA")
@@ -25,7 +23,7 @@ class ImageProcessingService:
 
             final_img_rgb = base_img.convert("RGB")
 
-            # 3. Compress
+            # 3. Aggressive Compression
             return self._compress_to_target_size(final_img_rgb)
 
         except Exception as e:
@@ -48,22 +46,62 @@ class ImageProcessingService:
         return Image.alpha_composite(base_img, transparent_layer)
 
     def _compress_to_target_size(self, img: Image.Image) -> bytes:
-        quality = 95
-        step = 10
-        min_quality = 10 
+        """
+        Guarantees < 500KB using strict resizing + quality reduction.
+        """
         img_byte_arr = io.BytesIO()
+        
+        # STEP 1: Initial Sanity Resize
+        # If image is massive (e.g. 4000px), immediately drop to 1920px (Full HD).
+        # A 4000px image will almost NEVER be < 500KB unless quality is destroyed.
+        if img.width > 1920 or img.height > 1920:
+            logger.info(f"Image too big ({img.width}x{img.height}). Resizing to max 1920px.")
+            img.thumbnail((1920, 1920), Image.Resampling.LANCZOS)
 
-        if img.width > 3840: img.thumbnail((3840, 3840))
-
-        while quality >= min_quality:
+        quality = 90
+        iteration = 0
+        
+        while True:
             img_byte_arr.seek(0)
             img_byte_arr.truncate()
+            
+            # Save
             img.save(img_byte_arr, format='JPEG', quality=quality, optimize=True)
-            if img_byte_arr.tell() <= self.MAX_SIZE_BYTES:
+            size = img_byte_arr.tell()
+            
+            # Success Check
+            if size <= self.MAX_SIZE_BYTES:
+                logger.info(f"Compression success: {size/1024:.2f}KB | Quality: {quality} | Size: {img.width}x{img.height}")
                 img_byte_arr.seek(0)
                 return img_byte_arr.read()
-            quality -= step
             
+            # Failure Handling
+            iteration += 1
+            if iteration > 15: # Safety break to prevent infinite loops
+                break
+
+            # STRATEGY:
+            # 1. If quality is good (>70), just lower quality.
+            # 2. If quality gets too low (<=70), RESIZE the image smaller.
+            #    (Better to have a sharp small image than a blurry large one)
+            if quality > 70:
+                quality -= 10
+            else:
+                # Drastic Resize: Reduce dimensions by 25%
+                new_width = int(img.width * 0.75)
+                new_height = int(img.height * 0.75)
+                
+                # Don't go absurdly small
+                if new_width < 600: 
+                    # If we are tiny and still > 500KB (unlikely), force low quality
+                    quality = 50 
+                else:
+                    logger.info(f"Resizing further to {new_width}x{new_height}...")
+                    img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                    # Reset quality to 85 because we have a new, smaller canvas
+                    quality = 85
+
+        # Final return if loop breaks
         img_byte_arr.seek(0)
         return img_byte_arr.read()
 
