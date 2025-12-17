@@ -1,7 +1,6 @@
 from pydantic_settings import BaseSettings
 from typing import Optional
 
-
 class Settings(BaseSettings):
     # AWS Configuration
     aws_id: str
@@ -9,8 +8,14 @@ class Settings(BaseSettings):
     aws_s3_bucket: str
     region: str = "us-east-1"
     
-    # Database Configuration
-    database_url: str = "sqlite:///./faces.db"
+    # --- NEW: MySQL Database Configuration ---
+    # These match the variables used in FaceService
+    mysql_host: str = "localhost"
+    mysql_user: str = "root"
+    mysql_password: str = ""   # Put your password here or in .env
+    mysql_db: str = "face_db"
+    mysql_port: int = 3306
+    # -----------------------------------------
     
     # API Configuration
     api_title: str = "Face Detection API"
@@ -23,13 +28,12 @@ class Settings(BaseSettings):
     
     # Face Detection Configuration
     similarity_threshold: float = 0.3
-    face_model_name: str = "Facenet"  # Renamed to avoid conflict
+    face_model_name: str = "Facenet"
     
     model_config = {
         "env_file": ".env",
         "case_sensitive": False,
         "protected_namespaces": ('settings_',)
     }
-
 
 settings = Settings()
